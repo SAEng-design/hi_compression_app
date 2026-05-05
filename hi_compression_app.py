@@ -50,23 +50,23 @@ else:
 selected = st.sidebar.selectbox("Designation", designations)
 row = df_use[df_use["designation"] == selected].iloc[0]
 
-# Extract section properties (convert from CSV units to base mm units)
+# Extract section properties
 m   = float(row["m"])
-h   = float(row["h"])         # mm
-b   = float(row["b"])         # mm
-tw  = float(row["tw"])        # mm
-tf  = float(row["tf"])        # mm
-r1  = float(row["r"])         # mm
-A   = float(row["A"]) * 1e3   # 10³ mm² → mm²
-d   = float(row["d"])         # mm — clear web depth
-Ix  = float(row["Ix"]) * 1e6  # 10⁶ mm⁴ → mm⁴
-Zex = float(row["Zex"]) * 1e3 # 10³ mm³ → mm³
-rx  = float(row["rx"])        # mm
-Iy  = float(row["Iy"]) * 1e6  # mm⁴
-Zey = float(row["Zey"]) * 1e3 # mm³
-ry  = float(row["ry"])        # mm
-J   = float(row["J"]) * 1e3   # 10³ mm⁴ → mm⁴
-Cw  = float(row["Cw"]) * 1e9  # 10⁹ mm⁶ → mm⁶
+h   = float(row["h"])
+b   = float(row["b"])
+tw  = float(row["tw"])
+tf  = float(row["tf"])
+r1  = float(row["r"])
+A   = float(row["A"]) * 1e3
+d   = float(row["d"])
+Ix  = float(row["Ix"]) * 1e6
+Zex = float(row["Zex"]) * 1e3
+rx  = float(row["rx"])
+Iy  = float(row["Iy"]) * 1e6
+Zey = float(row["Zey"]) * 1e3
+ry  = float(row["ry"])
+J   = float(row["J"]) * 1e3
+Cw  = float(row["Cw"]) * 1e9
 
 hw = float(row["d"])   # clear web depth from CSV (between fillet welds)
 
@@ -92,7 +92,6 @@ if grade_label == "Custom...":
 else:
     fy = steel_grades[grade_label]
 
-    # Reduced fy for thicker flanges (only applies to standard grades)
     if tf > 16:
         if fy == 355:
             fy = 345
@@ -128,55 +127,25 @@ C_f = st.sidebar.number_input("Factored axial load C* (kN)", min_value=0.0, valu
 # ══ CALCULATIONS ══════════════════════════════════════════════════════════════
 
 # 1. Section classification (Cl. 11, Table 3 / Table 4.2)
-# Outstand of compression flange (supported on one edge): b1/t ≤ 200/√fy
-b1_flange = b / 2
+b1_flange    = b / 2
 flange_ratio = b1_flange / tf
 flange_limit = 200 / math.sqrt(fy)
 flange_class = "Class 4 (slender)" if flange_ratio > flange_limit else "Not Class 4"
 
-# Web in axial compression (supported on both edges): hw/tw ≤ 670/√fy
-web_ratio = hw / tw
-web_limit = 670 / math.sqrt(fy)
-web_class = "Class 4 (slender)" if web_ratio > web_limit else "Not Class 4"
+web_ratio  = hw / tw
+web_limit  = 670 / math.sqrt(fy)
+web_class  = "Class 4 (slender)" if web_ratio > web_limit else "Not Class 4"
 
-is_class4 = flange_class.startswith("Class 4") or web_class.startswith("Class 4")
+is_class4     = flange_class.startswith("Class 4") or web_class.startswith("Class 4")
 section_class = "Class 4 (Slender)" if is_class4 else "Class 3 or better"
 
-# 2. Effective area (Cl. 13.3.3) — for Class 4 sections
-def effective_area(A_gross, fy_val):
-    """Reduce element widths per Cl. 13.3.3 / Eq. 4.46 if slender."""
-    Aef = A_gross
-    f_calc = fy_val   # conservative — assume f = fy
-
-    # Flange — supported on one edge (k=0.43)
-    W_f    = b1_flange / tf
-    W_lim_f = 0.644 * math.sqrt(0.43 * E / f_calc)
-    if W_f > W_lim_f:
-        b_eff_f = 0.95 * tf * math.sqrt(0.43 * E / f_calc) * (1 - (0.208 / W_f) * math.sqrt(0.43 * E / f_calc))
-        # 4 outstanding flange portions reduced
-        Aef -= 4 * (b1_flange - b_eff_f) * tf
-
-    # Web — supported on both edges (k=4.0)
-    W_w    = hw / tw
-    W_lim_w = 0.644 * math.sqrt(4.0 * E / f_calc)
-    if W_w > W_lim_w:
-        b_eff_w = 0.95 * tw * math.sqrt(4.0 * E / f_calc) * (1 - (0.208 / W_w) * math.sqrt(4.0 * E / f_calc))
-        Aef -= (hw - b_eff_w) * tw
-
-    return max(Aef, 0)
-
-if is_class4:
-    A_eff = effective_area(A, fy)
-else:
-    A_eff = A
-
-# 3. Slenderness ratios (Cl. 10.4.2.1, limit ≤ 200)
+# 2. Slenderness ratios (Cl. 10.4.2.1, limit ≤ 200)
 sl_x = KLx / rx if KLx > 0 else 0
 sl_y = KLy / ry if KLy > 0 else 0
 sl_x_ok = sl_x <= 200
 sl_y_ok = sl_y <= 200
 
-# 4. Elastic buckling stresses
+# 3. Elastic buckling stresses
 def safe_fe(KL, r):
     if KL <= 0:
         return float("inf")
@@ -185,20 +154,58 @@ def safe_fe(KL, r):
 f_ex = safe_fe(KLx, rx)
 f_ey = safe_fe(KLy, ry)
 
-# Torsional stress f_ez (doubly symmetric: x0 = y0 = 0)
 if KLz > 0:
     r0_sq = rx**2 + ry**2
     f_ez  = (math.pi**2 * E * Cw / KLz**2 + G * J) / (A * r0_sq)
 else:
-    f_ez  = float("inf")
+    f_ez = float("inf")
 
-# Governing elastic stress
 f_e = min(f_ex, f_ey, f_ez)
 
-# Identify governing mode
 if   f_e == f_ex: governing_mode = "Flexural buckling about x-axis"
 elif f_e == f_ey: governing_mode = "Flexural buckling about y-axis"
 else:             governing_mode = "Torsional buckling about z-axis"
+
+# 4. Effective area (Cl. 13.3.3) — calculated AFTER governing fe is known
+# Per Cl. 13.3.3, f is the calculated compressive stress in the element (≤ fy).
+# Per textbook example: f = fy·(1 + λ^(2n))^(-1/n) — actual compressive stress
+# under ultimate load using the column resistance formula (without phi).
+def effective_area(A_gross, f_calc):
+    """Reduce element widths per Cl. 13.3.3 / Eq. 4.46 — only if Class 4."""
+    Aef = A_gross
+    reductions = {"flange": 0.0, "web": 0.0}
+
+    # Flange — supported on one edge (k = 0.43) — only if flange is Class 4
+    if flange_class.startswith("Class 4"):
+        W_f     = b1_flange / tf
+        W_lim_f = 0.644 * math.sqrt(0.43 * E / f_calc)
+        if W_f > W_lim_f:
+            b_eff_f = 0.95 * tf * math.sqrt(0.43 * E / f_calc) * (1 - (0.208 / W_f) * math.sqrt(0.43 * E / f_calc))
+            # 4 outstand portions: 2 flanges × 2 outstands per flange
+            reductions["flange"] = 4 * (b1_flange - b_eff_f) * tf
+            Aef -= reductions["flange"]
+
+    # Web — supported on both edges (k = 4.0) — only if web is Class 4
+    if web_class.startswith("Class 4"):
+        W_w     = hw / tw
+        W_lim_w = 0.644 * math.sqrt(4.0 * E / f_calc)
+        if W_w > W_lim_w:
+            b_eff_w = 0.95 * tw * math.sqrt(4.0 * E / f_calc) * (1 - (0.208 / W_w) * math.sqrt(4.0 * E / f_calc))
+            reductions["web"] = (hw - b_eff_w) * tw
+            Aef -= reductions["web"]
+
+    return max(Aef, 0), reductions
+
+# Calculate f per Cl. 13.3.3 / textbook formula
+lam_for_aef = math.sqrt(fy / f_e)
+f_for_aef   = fy * (1 + lam_for_aef**(2 * n_param))**(-1 / n_param)
+f_for_aef   = min(f_for_aef, fy)   # cap at fy per code
+
+if is_class4:
+    A_eff, area_reductions = effective_area(A, f_for_aef)
+else:
+    A_eff = A
+    area_reductions = {"flange": 0.0, "web": 0.0}
 
 # 5. Compressive resistance — Eq. 4.24
 lam = math.sqrt(fy / f_e)
@@ -255,45 +262,48 @@ st.subheader("Design results")
 with st.expander(header, expanded=True):
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Cr",           f"{Cr:.1f} kN")
-    c2.metric("λ",            f"{lam:.3f}")
-    c3.metric("f_e",          f"{f_e:.1f} MPa")
+    c1.metric("Cr",            f"{Cr:.1f} kN")
+    c2.metric("λ",             f"{lam:.3f}")
+    c3.metric("f_e",           f"{f_e:.1f} MPa")
     c4.metric("Section class", "Class 4" if is_class4 else "Cl. 3 or better")
 
     rows = [
-        ("─── 1. Section classification — Cl. 11 ───",   ""),
-        ("Flange b₁/t",                                   f"{flange_ratio:.2f}"),
-        ("Flange limit (200/√fy)",                        f"{flange_limit:.2f}"),
-        ("Flange",                                        flange_class),
-        ("Web hw/tw",                                     f"{web_ratio:.2f}"),
-        ("Web limit (670/√fy)",                           f"{web_limit:.2f}"),
-        ("Web",                                           web_class),
-        ("Overall section",                               section_class),
+        ("─── 1. Section classification — Cl. 11 ───",                           ""),
+        ("Flange b₁/t",                                                          f"{flange_ratio:.2f}"),
+        ("Flange limit (200/√fy)",                                               f"{flange_limit:.2f}"),
+        ("Flange",                                                               flange_class),
+        ("Web hw/tw",                                                            f"{web_ratio:.2f}"),
+        ("Web limit (670/√fy)",                                                  f"{web_limit:.2f}"),
+        ("Web",                                                                  web_class),
+        ("Overall section",                                                      section_class),
 
-        ("─── 2. Effective area — Cl. 13.3.3 ───",        ""),
-        ("A (gross)",                                     f"{A:.0f} mm²"),
-        ("A_eff (used in Cr)",                            f"{A_eff:.0f} mm²"),
-        ("Area reduction",                                f"{(1 - A_eff/A)*100:.1f} %"),
+        ("─── 2. Slenderness check — Cl. 10.4.2.1 ───",                          ""),
+        ("KLx / rx",                                                             f"{sl_x:.1f}" if KLx > 0 else "— (laterally restrained)"),
+        ("KLy / ry",                                                             f"{sl_y:.1f}" if KLy > 0 else "— (laterally restrained)"),
+        ("Limit",                                                                "200"),
+        ("KLx/rx status",                                                        "OK ✅" if (KLx == 0 or sl_x_ok) else "EXCEEDS LIMIT ❌"),
+        ("KLy/ry status",                                                        "OK ✅" if (KLy == 0 or sl_y_ok) else "EXCEEDS LIMIT ❌"),
 
-        ("─── 3. Slenderness check — Cl. 10.4.2.1 ───",   ""),
-        ("KLx / rx",                                      f"{sl_x:.1f}" if KLx > 0 else "— (laterally restrained)"),
-        ("KLy / ry",                                      f"{sl_y:.1f}" if KLy > 0 else "— (laterally restrained)"),
-        ("Limit",                                         "200"),
-        ("KLx/rx status",                                 "OK ✅" if (KLx == 0 or sl_x_ok) else "EXCEEDS LIMIT ❌"),
-        ("KLy/ry status",                                 "OK ✅" if (KLy == 0 or sl_y_ok) else "EXCEEDS LIMIT ❌"),
+        ("─── 3. Elastic buckling stresses ───",                                 ""),
+        ("f_ex = π²E / (KLx/rx)²",                                               f"{f_ex:.1f} MPa" if KLx > 0 else "— (restrained)"),
+        ("f_ey = π²E / (KLy/ry)²",                                               f"{f_ey:.1f} MPa" if KLy > 0 else "— (restrained)"),
+        ("f_ez = [π²E·Cw/(KLz)² + GJ] / (A·r₀²)",                               f"{f_ez:.1f} MPa" if KLz > 0 else "— (restrained)"),
+        ("Governing f_e",                                                        f"{f_e:.1f} MPa"),
+        ("Governing mode",                                                       governing_mode),
 
-        ("─── 4. Elastic buckling stresses ───",          ""),
-        ("f_ex = π²E / (KLx/rx)²",                        f"{f_ex:.1f} MPa" if KLx > 0 else "— (restrained)"),
-        ("f_ey = π²E / (KLy/ry)²",                        f"{f_ey:.1f} MPa" if KLy > 0 else "— (restrained)"),
-        ("f_ez = [π²E·Cw/(KLz)² + GJ] / (A·r₀²)",       f"{f_ez:.1f} MPa" if KLz > 0 else "— (restrained)"),
-        ("Governing f_e",                                 f"{f_e:.1f} MPa"),
-        ("Governing mode",                                governing_mode),
+        ("─── 4. Effective area — Cl. 13.3.3 ───",                               ""),
+        ("f used = fy·(1+λ²ⁿ)^(-1/n), capped at fy",                            f"{f_for_aef:.1f} MPa"),
+        ("A (gross)",                                                            f"{A:.0f} mm²"),
+        ("Flange reduction (only if flange is Class 4)",                         f"{area_reductions['flange']:.1f} mm²"),
+        ("Web reduction (only if web is Class 4)",                               f"{area_reductions['web']:.1f} mm²"),
+        ("A_eff (used in Cr)",                                                   f"{A_eff:.0f} mm²"),
+        ("Area reduction",                                                       f"{(1 - A_eff/A)*100:.1f} %"),
 
-        ("─── 5. Compressive resistance — Cl. 13.3.1 / Eq. 4.24 ───", ""),
-        ("Manufacturing parameter n",                     f"{n_param}"),
-        ("λ = √(fy/f_e)",                                 f"{lam:.3f}"),
-        ("Resistance factor φ",                           f"{phi}"),
-        ("Cr = φ·A·fy·(1 + λ^(2n))^(-1/n)",              f"{Cr:.1f} kN"),
+        ("─── 5. Compressive resistance — Cl. 13.3.1 / Eq. 4.24 ───",            ""),
+        ("Manufacturing parameter n",                                            f"{n_param}"),
+        ("λ = √(fy/f_e)",                                                        f"{lam:.3f}"),
+        ("Resistance factor φ",                                                  f"{phi}"),
+        ("Cr = φ·A_eff·fy·(1 + λ^(2n))^(-1/n)",                                  f"{Cr:.1f} kN"),
     ]
 
     df_out = pd.DataFrame(rows, columns=["Parameter", "Value"])
